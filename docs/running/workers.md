@@ -30,25 +30,46 @@ while a batch is being locked.
 
 ## The name
 
-Each worker runs under a stable **name** (`--name`, default: the hostname).
-The name is the unit of recovery, and the contract is:
+Each worker runs under a **name** (`--name`, default: the hostname). The name
+is recorded on every run the worker claims, and is what the UI and metrics
+use to attribute runs to workers. The contract is:
 
-- **identical across restarts** — on startup the worker re-claims the
-  workflows it was running when it last went away, matched by name, and
-  resumes them by replay;
 - **unique among concurrently running workers** — two live workers with the
-  same name will both try to resume the same runs.
+  same name will both try to resume the same crash-parked runs;
+- **identical across restarts** — so that a restart re-claims the runs a
+  crash of the previous process left behind (see [startup
+  catchup](#startup-catchup)).
 
-A k8s StatefulSet gives you both properties for free: each pod has a fixed,
-unique name.
+A clean shutdown needs no name: in-flight runs are requeued at shutdown, so
+a worker coming back under any name picks them up as normal work. A k8s
+StatefulSet gives you both properties for free: each pod has a fixed, unique
+name.
 
 ## Startup catchup
 
 Before entering the poll loop, the worker runs one **catchup**: it claims
-back its own in-flight workflows — `status = running AND claimed_by = <name>`,
-up to pool size — and submits them for replay. In steady state the loop only
-claims newly scheduled workflows; catchup is how a restart picks up exactly
-what the previous process with that name left behind.
+back runs parked under its own name — `status = running AND claimed_by =
+<name>`, up to pool size — and submits them for replay. After a clean
+shutdown the catchup finds nothing, because in-flight runs were requeued at
+shutdown; it exists to recover the runs a previous process with the same name
+left behind by a crash. In steady state the loop only claims newly scheduled
+workflows.
+
+## Shutdown (SIGTERM / SIGINT)
+
+On a stop signal the worker does not abort its work:
+
+1. it **stops claiming** — no new workflow is taken in;
+2. it **drains** — the step in flight in each of its workflows runs to the
+   end and is recorded, but **no new step starts**: at the next step boundary
+   the workflow is **requeued** (`scheduled`, claim released), so any runner
+   — under any name — can claim it and resume it from the recorded steps;
+3. it **waits** for the in-flight steps up to `--drain` seconds, then exits.
+   Anything still running is requeued the same way before the exit.
+
+`--drain 0` waits for in-flight work indefinitely. Nothing is left claimed by
+a worker that shuts down: a rolling deploy is lossless even when the
+replacement workers run under new names.
 
 ## What happens to a run
 
@@ -82,6 +103,6 @@ Two differences from standalone mode:
 
 - signal handlers are installed only when `run()` executes on the main
   thread; an embedded worker must be stopped with `worker.stop()`;
-- when the drain deadline expires with work still in flight, a standalone
-  worker exits the process; an embedded one simply returns and leaves the
-  process lifecycle to its host.
+- when the drain deadline expires with work still in flight, both modes
+  requeue the work first; a standalone worker then exits the process, an
+  embedded one simply returns and leaves the process lifecycle to its host.

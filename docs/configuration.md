@@ -28,8 +28,8 @@ exclusive but serialize while a batch is being locked.
 | --- | --- | --- |
 | `--pool N` | `4` | Thread pool size: the maximum number of workflows this worker runs at once. |
 | `--poll S` | `0.2` | Seconds between claim polls. Bounds how early a due workflow can be picked up. |
-| `--name NAME` | hostname | Stable runner identity. Identical across restarts, unique among concurrently running workers. See [workers](running/workers.md). |
-| `--drain S` | `30` | Seconds to wait for in-flight steps after SIGTERM/SIGINT, at step boundaries, before orphaning them and exiting. `0` waits indefinitely. See [rollouts](running/deploying.md#rollouts-sigterm-drain). |
+| `--name NAME` | hostname | Runner identity: recorded on claimed runs, used by the UI and metrics. Unique among concurrently running workers; keep it identical across restarts so a restart reclaims the runs a crash left behind. See [workers](running/workers.md). |
+| `--drain S` | `30` | Seconds to wait for in-flight steps after SIGTERM/SIGINT, at step boundaries, before requeueing the runs and exiting. `0` waits indefinitely. See [rollouts](running/deploying.md#rollouts-sigterm-drain). |
 | `--metrics-port N` | `0` (off) | Serve this worker's Prometheus metrics on the given TCP port. Requires the `metrics` extra. |
 | `--metrics-bind ADDR` | `0.0.0.0` | Interface to bind the metrics endpoint to (in-cluster scraping). |
 
@@ -67,6 +67,6 @@ authentication.
 
 ## Logging
 
-Worker events (orphaned workflows, runs that crashed outside the runner) are
+Worker events (requeued workflows, runs that crashed outside the runner) are
 logged through the `everystep` logger. Configure it like any other in your
 application; there are no everystep-specific logging settings.

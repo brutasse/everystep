@@ -11,10 +11,8 @@ from django.db import connection, connections
 
 from everystep import schedule, step, workflow
 from everystep.models import Step, Workflow
-from everystep.runner import execute
 from everystep.worker import Worker, claim_new, resume_own
 from tests import slow_steps
-from tests.helpers import re_claim
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -186,9 +184,10 @@ def test_drain_completes_inflight_workflow_within_deadline(monkeypatch):
     assert pending.status == Workflow.Status.SCHEDULED
 
 
-def test_drain_orphans_at_step_boundary_and_resume_completes(monkeypatch):
+def test_drain_requeues_at_step_boundary_and_new_name_completes(monkeypatch):
     # Stop lands mid step 2: step 2 finishes and is stored, step 3 never
-    # starts, the workflow is left running, and a same-named runner resumes it.
+    # starts, and the workflow is requeued for any runner to pick up. A
+    # runner with a different name resumes it from the recorded steps.
     monkeypatch.setenv("EVERYSTEP_TEST_STEP_SLEEP", "1")
     wf = schedule(slow_steps.slow_flow, {})
 
@@ -210,11 +209,25 @@ def test_drain_orphans_at_step_boundary_and_resume_completes(monkeypatch):
 
     assert not thread.is_alive()
     wf.refresh_from_db()
-    assert wf.status == Workflow.Status.RUNNING
+    assert wf.status == Workflow.Status.SCHEDULED
+    assert wf.claimed_by is None
     assert set(Step.objects.filter(workflow_id=wf.id).values_list("step_id", flat=True)) == {"1", "2"}
 
-    re_claim(wf)
-    execute(wf.id)
+    worker2 = Worker(pool_size=1, poll=0.05, name="drain-w2")
+    thread2 = threading.Thread(target=worker2.run, daemon=True)
+    thread2.start()
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            wf.refresh_from_db()
+            if wf.status == Workflow.Status.COMPLETED:
+                break
+            time.sleep(0.05)
+    finally:
+        worker2.stop()
+        thread2.join(timeout=10)
+
+    assert not thread2.is_alive()
     wf.refresh_from_db()
     assert wf.status == Workflow.Status.COMPLETED
     assert wf.result == "done"
@@ -223,9 +236,10 @@ def test_drain_orphans_at_step_boundary_and_resume_completes(monkeypatch):
 
 def test_drain_returns_leftovers_when_deadline_expires():
     worker = Worker(pool_size=1, poll=0.1, name="drain-timeout", drain=0.3)
+    wf = schedule(simple, {})
     gate = threading.Event()
     future = worker._executor.submit(gate.wait, 5)
-    worker._futures.append(future)
+    worker._active[future] = wf
     try:
         # Make sure the task is running (not still queued) before draining.
         deadline = time.time() + 10
@@ -238,10 +252,35 @@ def test_drain_returns_leftovers_when_deadline_expires():
     assert leftovers == [future]
 
 
-def test_sigterm_orphans_and_next_runner_resumes():
+def test_abandon_requeues_leftovers_when_deadline_expires():
+    # A run still in flight when the drain deadline expires is requeued, so
+    # nothing is left claimed by the exiting worker.
+    worker = Worker(pool_size=1, poll=0.1, name="abandon-w", drain=0.3)
+    wf = schedule(simple, {})
+    claimed = claim_new(1, "abandon-w")
+    assert [w.id for w in claimed] == [wf.id]
+    gate = threading.Event()
+    future = worker._executor.submit(gate.wait, 5)
+    worker._active[future] = wf
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline and not future.running():
+            time.sleep(0.01)
+        assert future.running()
+        leftovers = worker._drain()
+        assert leftovers == [future]
+        worker._abandon(leftovers)
+    finally:
+        gate.set()
+    wf.refresh_from_db()
+    assert wf.status == Workflow.Status.SCHEDULED
+    assert wf.claimed_by is None
+
+
+def test_sigterm_requeues_and_new_name_completes():
     # Full rollout battle test: a real process gets a real SIGTERM mid-step,
-    # exits at the drain deadline leaving the workflow running, and a new
-    # process with the same name resumes it where it left off.
+    # exits at the drain deadline having requeued the workflow, and a new
+    # process with a different name picks it up where it left off.
     name = "rollout-w"
     wf = schedule(slow_steps.slow_flow, {})
     procs = []
@@ -264,9 +303,53 @@ def test_sigterm_orphans_and_next_runner_resumes():
         assert elapsed < 8, f"runner took {elapsed:.1f}s to exit after SIGTERM (drain is 2s)"
 
         wf.refresh_from_db()
+        assert wf.status == Workflow.Status.SCHEDULED
+        assert wf.claimed_by is None
+        # The in-flight step had not finished before the exit: only step 1 stored.
+        assert set(Step.objects.filter(workflow_id=wf.id).values_list("step_id", flat=True)) == {"1"}
+
+        proc = _spawn_runner(f"{name}2", drain=2, sleep_seconds=0)
+        procs.append(proc)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            wf.refresh_from_db()
+            if wf.status == Workflow.Status.COMPLETED:
+                break
+            time.sleep(0.1)
+        assert wf.status == Workflow.Status.COMPLETED
+        assert wf.result == "done"
+        # Step 1 replayed from the store; steps 2 and 3 executed.
+        assert set(Step.objects.filter(workflow_id=wf.id).values_list("step_id", flat=True)) == {"1", "2", "3"}
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=10)
+
+
+def test_sigkill_parks_and_same_name_resumes():
+    # A process killed mid-step cannot requeue its runs: they stay parked,
+    # and a restart under the same name resumes them by replay.
+    name = "rollout-w"
+    wf = schedule(slow_steps.slow_flow, {})
+    procs = []
+    try:
+        proc = _spawn_runner(name, drain=2, sleep_seconds=30)
+        procs.append(proc)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if Step.objects.filter(workflow_id=wf.id, step_id="1").exists():
+                break
+            time.sleep(0.1)
+        assert Step.objects.filter(workflow_id=wf.id, step_id="1").exists()
+        time.sleep(0.5)  # let the sleeper get into its long sleep
+
+        proc.kill()
+        proc.wait(timeout=10)
+
+        wf.refresh_from_db()
         assert wf.status == Workflow.Status.RUNNING
         assert wf.claimed_by == name
-        # The in-flight step had not finished before the exit: only step 1 stored.
         assert set(Step.objects.filter(workflow_id=wf.id).values_list("step_id", flat=True)) == {"1"}
 
         proc = _spawn_runner(name, drain=2, sleep_seconds=0)

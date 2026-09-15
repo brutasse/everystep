@@ -1,14 +1,16 @@
 """Worker loop: claim due workflows and execute them on a thread pool.
 
-A worker has a stable name that is identical across restarts. On startup it
-re-claims the workflows it was running when it last went away (matched by
-name); in steady state it only claims new scheduled workflows.
+A worker has a name that is recorded on the runs it claims. On startup it
+re-claims the runs a previous process with the same name left behind by a
+crash (matched by name); after a clean shutdown there is nothing to catch
+up, because in-flight runs are requeued at shutdown. In steady state it only
+claims new scheduled workflows.
 
 On SIGTERM/SIGINT the worker stops claiming and drains: the step in flight
-in each workflow finishes and is recorded, but no new step starts, so the
-workflows are left running for the next worker with the same name. If the
-in-flight work does not finish within `drain` seconds, the process exits,
-orphaning whatever is still running.
+in each workflow finishes and is recorded, but no new step starts, and at
+the next step boundary the workflow is requeued so that any runner can pick
+it up. If the in-flight work does not finish within `drain` seconds, the
+worker requeues whatever is still running and the process exits.
 """
 
 import logging
@@ -84,10 +86,12 @@ def claim_new(limit, name):
 
 
 def resume_own(limit, name):
-    """Claim back this runner's own in-flight workflows after a restart.
+    """Claim back the runs a crashed process with this name left behind.
 
     Matches running workflows whose claimed_by is this runner's name. Called
-    once at startup; a runner never holds more than its pool size in flight.
+    once at startup; after a clean shutdown it finds nothing (in-flight runs
+    are requeued at shutdown), so it only recovers crash-leftover runs. A
+    runner never holds more than its pool size in flight.
     """
     with transaction.atomic():
         ids = _select_ids(
@@ -104,7 +108,7 @@ class Worker:
     """Claim due workflows and execute them on a thread pool.
 
     See the running section of the documentation for the claim loop, the
-    stable-name contract, and the SIGTERM drain behavior.
+    name contract, and the SIGTERM drain behavior.
     """
 
     def __init__(
@@ -118,7 +122,7 @@ class Worker:
         self.metrics_bind = metrics_bind
         self._stop = threading.Event()
         self._draining = threading.Event()
-        self._futures = []
+        self._active = {}
         self._executor = ThreadPoolExecutor(max_workers=pool_size, thread_name_prefix="everystep-w")
         self._metrics_server = None
 
@@ -134,24 +138,18 @@ class Worker:
             self._catchup()
             while not self._stop.is_set():
                 self._reap()
-                capacity = self.pool_size - len(self._futures)
+                capacity = self.pool_size - len(self._active)
                 if capacity > 0:
                     claimed = claim_new(capacity, self.name)
                     for workflow in claimed:
-                        self._futures.append(self._executor.submit(self._execute, workflow))
+                        self._active[self._executor.submit(self._execute, workflow)] = workflow
                     metrics.record_claims(self.name, len(claimed))
-                metrics.set_inflight(self.name, len(self._futures))
+                metrics.set_inflight(self.name, len(self._active))
                 self._stop.wait(self.poll)
         finally:
             leftovers = self._drain()
             if leftovers:
-                metrics.record_orphans(self.name, len(leftovers))
-                logger.warning(
-                    "everystep worker: drain deadline of %ss expired with %d workflow(s) still "
-                    "in flight; they are orphaned and will be picked up by the next worker "
-                    "named %r",
-                    self.drain, len(leftovers), self.name,
-                )
+                self._abandon(leftovers)
                 if threading.current_thread() is threading.main_thread():
                     # Standalone worker: exit now rather than let the
                     # interpreter join the abandoned pool threads at
@@ -173,34 +171,63 @@ class Worker:
         in-flight workflows to finish. Returns the futures still running
         when the deadline is hit. With drain of 0, waits indefinitely and
         returns nothing."""
-        if not self.drain:
+        if not self.drain or not self._active:
             self._executor.shutdown(wait=True)
             return []
         self._executor.shutdown(wait=False, cancel_futures=True)
-        _, not_done = wait(self._futures, timeout=self.drain)
+        _, not_done = wait(list(self._active), timeout=self.drain)
         return list(not_done)
 
+    def _abandon(self, leftovers):
+        """Requeue the runs still in flight when the drain deadline expired,
+        so nothing is left claimed by this worker."""
+        for future in leftovers:
+            self._requeue(self._active[future].id)
+        metrics.record_requeues(self.name, len(leftovers))
+        logger.warning(
+            "everystep worker: drain deadline of %ss expired with %d workflow(s) still "
+            "in flight; they were requeued and will be picked up by the next available "
+            "runner",
+            self.drain, len(leftovers),
+        )
+
+    def _requeue(self, workflow_id):
+        """Put a run back in the queue: scheduled and unclaimed, so any
+        runner can claim it and resume it from the recorded steps."""
+        updated = Workflow.objects.filter(
+            id=workflow_id,
+            status=Workflow.Status.RUNNING,
+            claimed_by=self.name,
+        ).update(status=Workflow.Status.SCHEDULED, claimed_by=None)
+        if not updated:
+            logger.warning(
+                "everystep worker: could not requeue workflow %s: no longer claimed by %r",
+                workflow_id, self.name,
+            )
+
     def _catchup(self):
-        """Re-claim this runner's in-flight workflows left over from before.
+        """Re-claim the runs a crashed process with this name left behind.
 
         Runs once at startup, before the poll loop, so it cannot re-select
-        workflows this process is already executing in its pool.
+        workflows this process is already executing in its pool. After a
+        clean shutdown it finds nothing: in-flight runs are requeued at
+        shutdown.
         """
         workflows = resume_own(self.pool_size, self.name)
         for workflow in workflows:
-            self._futures.append(self._executor.submit(self._execute, workflow))
+            self._active[self._executor.submit(self._execute, workflow)] = workflow
         metrics.record_claims(self.name, len(workflows))
 
     def _reap(self):
-        pending = []
-        for future in self._futures:
+        pending = {}
+        for future, workflow in self._active.items():
             if future.done():
                 exc = future.exception()
                 if exc is not None:
                     logger.exception("everystep worker: unexpected worker failure: %s", exc)
             else:
-                pending.append(future)
-        self._futures = pending
+                pending[future] = workflow
+        self._active = pending
 
     def _execute(self, workflow):
         started = time.monotonic()
@@ -208,16 +235,28 @@ class Worker:
             execute(workflow.id, draining=self._draining)
         except Workflow.DoesNotExist:
             logger.warning("everystep worker: workflow %s no longer exists", workflow.id)
+        except DrainOrphan:
+            # Drained at a step boundary with everything so far recorded:
+            # give the run back to the queue for any runner to resume.
+            self._requeue(workflow.id)
         except Exception as exc:
             logger.exception("everystep worker: workflow %s crashed outside the runner", workflow.id)
             report_workflow_failure(exc, workflow_id=workflow.id)
             try:
-                updated = Workflow.objects.filter(id=workflow.id, status=Workflow.Status.RUNNING).update(
+                # Guarded on claimed_by: if this run was requeued while a
+                # step was still in flight (drain deadline) and since
+                # claimed by another runner, its late failure must not fail
+                # that runner's live run.
+                updated = Workflow.objects.filter(
+                    id=workflow.id,
+                    status=Workflow.Status.RUNNING,
+                    claimed_by=self.name,
+                ).update(
                     status=Workflow.Status.FAILED,
                     error=serde.encode_exception(exc),
                     completed_at=timezone.now(),
                 )
-                if updated and not isinstance(exc, (SimulatedCrash, DrainOrphan, Terminal)):
+                if updated and not isinstance(exc, (SimulatedCrash, Terminal)):
                     metrics.record_workflow_terminal(
                         workflow.name, "failed", time.monotonic() - started
                     )

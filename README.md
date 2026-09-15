@@ -64,10 +64,11 @@ def provision_vm(args):
    workflow becomes claimable, on rollback it is gone.
 3. Run a worker (PostgreSQL or MariaDB):
    `python manage.py everystep_worker --pool 8 --poll 0.2 --name everystep-runner-0`.
-   The name must be stable across restarts and unique among running workers.
+   The name must be unique among running workers; keep it stable across
+   restarts so a restart reclaims the runs a crash left behind.
 
 The details — step identity and naming, reading previous results, `Terminal`
-stops, idempotent or keyed side effects, rollouts and orphaned workflows,
+stops, idempotent or keyed side effects, rollouts and crashed runners,
 metrics, Sentry, traces, the UI, storage limits, thread safety — are all in
 the [documentation](https://brutasse.github.io/everystep/).
 

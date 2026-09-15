@@ -73,8 +73,10 @@ state:
 
 - **Claims** use `SELECT ... FOR UPDATE SKIP LOCKED` on PostgreSQL (a plain
   `FOR UPDATE` on MariaDB), so concurrent workers take disjoint sets of rows;
-- **Recovery** matches on the worker name — a run is re-claimed only by a
-  worker with the same `claimed_by`;
+- **Recovery** matches on the worker name and only applies after a crash — a
+  run parked by a dead worker is re-claimed only by a worker with the same
+  `claimed_by`; a worker that shuts down cleanly requeues its runs instead,
+  so any runner can claim them;
 - **Terminal transitions** are conditional updates from `running` only, so a
   stale write cannot clobber a run that has moved on;
 - **Idempotency keys** and **step identities** are enforced by unique

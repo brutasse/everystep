@@ -30,9 +30,9 @@ id — see [identity](identity.md).
 - **Exactly one branch fails** → that branch's exception is re-raised as is.
 - **Several branches fail** → an `ExceptionGroup` is raised containing all
   of them.
-- **`Terminal` (or a drain orphan) in any branch** → that exception is
-  raised ahead of any `ExceptionGroup`, so a deliberate stop is never
-  wrapped. See [errors](errors.md#stopping-a-workflow-terminal).
+- **`Terminal` (or a `DrainOrphan` during a drain) in any branch** → that
+  exception is raised ahead of any `ExceptionGroup`, so a deliberate stop is
+  never wrapped. See [errors](errors.md#stopping-a-workflow-terminal).
 
 Branches are independent: when one fails, the healthy branches still run to
 completion and are **recorded** — they will be served from the store on the

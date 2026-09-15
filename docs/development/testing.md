@@ -52,13 +52,14 @@ this per test).
 
 - `run_to_completion(*args)` — schedule, claim, execute;
 - `claim_next()` — claim the next scheduled run;
-- `re_claim(run)` — simulate the claiming worker restarting and taking its
-  run back;
+- `re_claim(run)` — simulate the claiming worker restarting after a crash
+  and taking its run back;
 - `crash_on(step_id)` — a ready-made fault handler.
 
-The rollout tests go further and spawn a **real worker subprocess**, send it
-a real `SIGTERM` mid-step, and assert that the new process under the same
-name resumes the run.
+The rollout tests go further and spawn **real worker subprocesses**: one gets
+a real `SIGTERM` mid-step and must requeue its run for a new process under a
+different name; the other is killed mid-step and is resumed by a restart
+under the same name.
 
 ## Repository layout
 

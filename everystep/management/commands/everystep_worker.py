@@ -15,16 +15,17 @@ class Command(BaseCommand):
             default=30,
             help=(
                 "seconds to wait for in-flight workflows after SIGTERM/SIGINT, at step "
-                "boundaries, before orphaning them and exiting (0: wait indefinitely)"
+                "boundaries, before requeueing them and exiting (0: wait indefinitely)"
             ),
         )
         parser.add_argument(
             "--name",
             default=None,
             help=(
-                "stable runner name (default: hostname). Must be identical across "
-                "restarts so the runner re-claims its in-flight workflows; it must "
-                "also be unique among concurrently running runners."
+                "runner name (default: hostname). Must be unique among concurrently "
+                "running runners; keep it identical across restarts so a restart "
+                "reclaims the runs a crash left behind (a clean shutdown requeues "
+                "them, so it needs no name)."
             ),
         )
         parser.add_argument(

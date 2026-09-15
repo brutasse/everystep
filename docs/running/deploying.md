@@ -2,13 +2,15 @@
 
 ## Deployment
 
-A deployment is a set of worker processes, each with a **stable, unique
-name**, pointed at the same database.
+A deployment is a set of worker processes, each with a **unique name** —
+stable across restarts if you want automatic crash recovery — pointed at the
+same database.
 
 ### Kubernetes: StatefulSet
 
 A StatefulSet is the natural fit, because each pod has a fixed, unique name
-that survives restarts:
+that survives restarts, which is what [crash recovery](#crashed-runners)
+relies on:
 
 ```yaml
 apiVersion: apps/v1
@@ -38,6 +40,9 @@ spec:
 - Scale by changing `replicas`; each replica is an independent claimer.
 - `terminationGracePeriodSeconds` must be **greater** than `--drain` so the
   worker can exit cleanly before the pod is killed.
+- A plain Deployment (ephemeral pod names) works for everything except
+  crash recovery: a clean shutdown requeues in-flight runs under any name,
+  but a crashed pod leaves its runs parked (see [crashed runners](#crashed-runners)).
 
 ### systemd
 
@@ -54,22 +59,17 @@ TimeoutStopSec=90
 
 ## Rollouts (SIGTERM drain)
 
-On `SIGTERM` (or `SIGINT`) a worker does not abort its work. It:
+On `SIGTERM` (or `SIGINT`) a worker does not abort its work. It stops
+claiming, lets the in-flight step of each of its runs finish and be recorded,
+and **requeues each run at the next step boundary** — `scheduled`, claim
+released — so any runner can claim it and resume it from the recorded steps.
+It waits up to `--drain` seconds for the in-flight steps, then exits,
+requeueing anything still running first. `--drain 0` waits for in-flight work
+indefinitely.
 
-1. **stops claiming** — no new workflow is taken in;
-2. **drains** — the step in flight in each of its workflows runs to the end
-   and is recorded, but **no new step starts**: at the next step boundary the
-   engine raises an internal control-flow exception and leaves the workflow
-   `running`, parked at a step boundary with everything so far recorded;
-3. **waits** for the in-flight steps up to `--drain` seconds, then exits.
-   Anything still running is **orphaned** (see below).
-
-`--drain 0` waits for in-flight work indefinitely.
-
-A worker coming up under the same name re-claims those parked workflows at
-startup and resumes them by replay, picking up exactly where the old one left
-off. A rolling deploy with a StatefulSet is therefore lossless: pods are
-restarted one at a time, each under its own name.
+A rolling deploy is therefore lossless with **any** runner names: a worker
+that shuts down never leaves a run claimed by it, and recorded progress is
+never lost — the next claimer resumes by replay.
 
 **Tuning `--drain`:**
 
@@ -78,32 +78,22 @@ restarted one at a time, each under its own name.
   gets killed mid-step, which is fine for correctness (the step re-runs) but
   defeats the point of draining;
 - **at or above** your longest-running step — so every in-flight step gets to
-  finish and be recorded, and no run is needlessly orphaned.
+  finish and be recorded, instead of being re-executed by the next claimer.
 
-## Orphans and recovery
+## Crashed runners
 
-!!! warning
-    Recovery is **by identity, not by time**. A workflow is only ever re-claimed
-    by a worker with the **same name**.
+A worker that dies without draining — `SIGKILL`, OOM, power loss — cannot
+requeue its in-flight runs. They stay `running`, claimed by the dead worker's
+name, and no other worker claims them (claims only take `scheduled` rows).
+They are recovered by:
 
-If that name never comes back — the StatefulSet is scaled down or deleted, a
-unit is removed — its in-flight workflows are **orphaned**: no other worker
-will steal them. Signals that this happened:
-
-- the worker's shutdown log: `drain deadline of Ns expired with M workflow(s)
-  still in flight; they are orphaned and will be picked up by the next worker
-  named ...`
-- the `everystep_worker_orphans_total` metric for that runner.
-
-Two remedies:
-
-- **point a worker at the orphaned name** (`--name <that-name>`): its startup
-  catchup claims the parked workflows and resumes them by replay;
-- **re-schedule** the work with fresh arguments and, if you use them, fresh
+- **a restart under the same name**: the startup catchup reclaims the parked
+  runs and resumes them by replay. This is why the runner name should
+  survive restarts (a k8s StatefulSet gives you that for free);
+- **a manual requeue**: an operator sets the rows back to `scheduled` (for
+  example from the Django shell) and any worker picks the runs up; or
+  re-schedule the work with fresh arguments and, if you use them, fresh
   idempotency keys — the old run keeps its row.
-
-Both are manual; everystep deliberately does not guess which orphaned work is
-still worth doing.
 
 ## Data retention
 

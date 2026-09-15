@@ -33,7 +33,7 @@ def _define():
     registry and call this again for a clean state.
     """
     global _workflow_runs, _workflow_duration, _step_runs, _step_duration
-    global _worker_pool_size, _worker_inflight, _worker_claims, _worker_orphans
+    global _worker_pool_size, _worker_inflight, _worker_claims, _worker_requeues
     global _worker_started_at, _workflows_pending, _workflows_running
     global _workflows_oldest_pending_age, _collectors
 
@@ -72,9 +72,9 @@ def _define():
         "Workflows claimed by the worker.",
         labelnames=("runner",),
     )
-    _worker_orphans = prometheus_client.Counter(
-        "everystep_worker_orphans",
-        "Workflows orphaned when the drain deadline expired.",
+    _worker_requeues = prometheus_client.Counter(
+        "everystep_worker_requeued",
+        "In-flight workflows requeued when the drain deadline expired.",
         labelnames=("runner",),
     )
     _worker_started_at = prometheus_client.Gauge(
@@ -102,7 +102,7 @@ def _define():
         _worker_pool_size,
         _worker_inflight,
         _worker_claims,
-        _worker_orphans,
+        _worker_requeues,
         _worker_started_at,
         _workflows_pending,
         _workflows_running,
@@ -147,10 +147,10 @@ def record_claims(name, count):
     _worker_claims.labels(runner=name).inc(count)
 
 
-def record_orphans(name, count):
+def record_requeues(name, count):
     if not enabled or not count:
         return
-    _worker_orphans.labels(runner=name).inc(count)
+    _worker_requeues.labels(runner=name).inc(count)
 
 
 def update_queue_gauges():

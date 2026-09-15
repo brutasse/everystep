@@ -149,7 +149,8 @@ def test_runner_escape_is_reported(sentry):
     # a wrapping transaction to keep its setup data alive.
     run = schedule(blobby, {})
     claimed = claim_next()
-    Worker(pool_size=1)._execute(claimed)
+    # _execute only fails a run it claims itself (claimed_by == worker name).
+    Worker(pool_size=1, name="test-worker")._execute(claimed)
     run.refresh_from_db()
 
     assert run.status == Workflow.Status.FAILED

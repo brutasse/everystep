@@ -22,8 +22,8 @@ class DrainOrphan(EverystepError):
     """Raised at a step boundary when the runner is draining after a stop signal.
 
     The step in flight at the signal finishes and is recorded; no new step
-    starts. The workflow is left running to be resumed by the next runner
-    with the same name.
+    starts. The worker requeues the workflow so any runner can claim it and
+    resume it from the recorded steps.
     """
 
 

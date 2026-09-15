@@ -17,7 +17,7 @@ crashes while processing a claimed run).
 
 Never reported:
 
-- control-flow exceptions — simulated crashes and drain orphans;
+- control-flow exceptions — simulated crashes and drain requeues;
 - workflows a step stopped with `Terminal` — a deliberate stop is not a
   failure.
 
@@ -37,8 +37,8 @@ The span model:
 
 - **One span per run**, named after the workflow, carrying
   `everystep.workflow.id` and `everystep.workflow.status` — `completed`, `failed`,
-  `stopped`, or `running` when the run was left for the next worker (drain
-  or crash).
+  `stopped`, or `running` when the run was requeued for the next claimer
+  (drain) or left by a crash.
 - **One child span per step actually executed**, named after the step,
   carrying `everystep.step.id`. Steps served from the store on a replay are not
   re-traced.

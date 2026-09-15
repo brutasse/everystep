@@ -8,15 +8,17 @@ replay means, and what guarantees everystep gives you.
 A workflow run is a `everystep_workflow` row with a status:
 
 ```
-scheduled ──claim──▶ running ──▶ completed
-                          ├──▶ failed
-                          └──▶ stopped
+          claim
+scheduled ──────▶ running ──▶ completed
+     ▲               ├──▶ failed
+     └───────────────└──▶ stopped
+          requeue
 ```
 
 | Status | Meaning |
 | --- | --- |
-| `scheduled` | Claimable. Set by `schedule()` at commit time. |
-| `running` | Claimed; `claimed_by` names the worker. The run may be actively executing, or left at a step boundary by a draining or crashed worker. |
+| `scheduled` | Claimable. Set by `schedule()` at commit time, and by a worker requeuing its runs at shutdown. |
+| `running` | Claimed; `claimed_by` names the worker. Either actively executing, or parked there by a crashed worker — a worker that shuts down cleanly requeues its runs instead. |
 | `completed` | Terminal. `result` holds the workflow's return value; `completed_at` is set. |
 | `failed` | Terminal. `error` holds the encoded exception; `completed_at` is set. |
 | `stopped` | Terminal, deliberate. A step raised `Terminal`; `error` holds the encoded reason and payload. See [errors](errors.md#stopping-a-workflow-terminal). |

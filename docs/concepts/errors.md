@@ -102,4 +102,4 @@ ahead of any `ExceptionGroup` the fork would build.
 | `WorkflowCodeError` | The body at a recorded step id no longer calls the recorded function: the code diverged from an in-flight run. The run fails loudly instead of executing the wrong work. |
 | `StepFailure` | A replayed recorded failure whose original exception type is unavailable. Carries the stored message. |
 | `SimulatedCrash` | Raised only from the test `fault` hook to simulate a process death. Never raised in production code paths. |
-| `DrainOrphan` | Internal control flow: raised at a step boundary while the worker drains after a stop signal, leaving the run `running` for the next same-named worker. You neither raise nor catch this. |
+| `DrainOrphan` | Internal control flow: raised at a step boundary while the worker drains after a stop signal; the worker requeues the run so any runner can claim it. You neither raise nor catch this. |

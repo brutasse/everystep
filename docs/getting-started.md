@@ -109,10 +109,11 @@ python manage.py everystep_worker --pool 8 --poll 0.2 --name everystep-runner-0
 ```
 
 The worker polls for due workflows, runs them on a thread pool, and replays
-them to completion. Give it a **stable name**: identical across restarts,
-unique among concurrently running workers. A k8s StatefulSet gives you both
-for free — see [workers](running/workers.md) and
-[deployment](running/deploying.md).
+them to completion. Give it a name **unique among concurrently running
+workers**; keep it identical across restarts (a k8s StatefulSet gives you
+both for free) so a restart can reclaim the runs a crash left behind — a
+clean shutdown requeues them under any name. See [workers](running/workers.md)
+and [deployment](running/deploying.md).
 
 ## Watch it run
 

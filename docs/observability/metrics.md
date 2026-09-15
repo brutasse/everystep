@@ -53,7 +53,7 @@ call `everystep.metrics.update_queue_gauges()` before rendering.
 | `everystep_worker_pool_size` | gauge | `runner` | The worker's thread pool size. |
 | `everystep_worker_inflight` | gauge | `runner` | Workflows currently in flight in this worker. |
 | `everystep_worker_claims_total` | counter | `runner` | Workflows claimed (including startup catchup). |
-| `everystep_worker_orphans_total` | counter | `runner` | Workflows orphaned when the drain deadline expired. |
+| `everystep_worker_requeued_total` | counter | `runner` | In-flight workflows requeued when the drain deadline expired. |
 | `everystep_worker_started_at_seconds` | gauge | `runner` | Unix time the worker started (uptime). |
 | `everystep_workflows_pending` | gauge | — | Workflows scheduled and waiting for a claim. |
 | `everystep_workflows_running` | gauge | — | Workflows currently running. |

@@ -112,8 +112,8 @@ def execute(workflow_id, draining=None):
 
     `draining` is an Event the runner sets on stop: the step in flight at
     the signal finishes and is recorded, but no new step starts; the
-    DrainOrphan raised at the next step boundary is caught here and the
-    workflow is left running for the next runner to resume.
+    DrainOrphan raised at the next step boundary propagates to the caller,
+    which requeues the workflow so any runner can claim it.
     """
     started = time.monotonic()
     workflow = Workflow.objects.get(id=workflow_id)
@@ -147,7 +147,7 @@ def execute(workflow_id, draining=None):
                 raise
             except DrainOrphan:
                 span.set_attribute("everystep.workflow.status", "running")
-                return
+                raise
             except Terminal as t:
                 updated = Workflow.objects.filter(id=workflow.id, status=Workflow.Status.RUNNING).update(
                     status=Workflow.Status.STOPPED,

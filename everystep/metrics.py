@@ -35,7 +35,7 @@ def _define():
     global _workflow_runs, _workflow_duration, _step_runs, _step_duration
     global _worker_pool_size, _worker_inflight, _worker_claims, _worker_requeues
     global _worker_started_at, _workflows_pending, _workflows_running
-    global _workflows_oldest_pending_age, _collectors
+    global _workflows_blocked, _workflows_oldest_pending_age, _collectors
 
     _workflow_runs = prometheus_client.Counter(
         "everystep_workflow_runs",
@@ -90,6 +90,10 @@ def _define():
         "everystep_workflows_running",
         "Workflows currently running.",
     )
+    _workflows_blocked = prometheus_client.Gauge(
+        "everystep_workflows_blocked",
+        "Workflows blocked awaiting a human decision on an uncertain step effect.",
+    )
     _workflows_oldest_pending_age = prometheus_client.Gauge(
         "everystep_workflows_oldest_pending_age_seconds",
         "Age of the oldest scheduled workflow.",
@@ -106,6 +110,7 @@ def _define():
         _worker_started_at,
         _workflows_pending,
         _workflows_running,
+        _workflows_blocked,
         _workflows_oldest_pending_age,
     ]
 
@@ -174,6 +179,9 @@ def update_queue_gauges():
         )
     _workflows_running.set(
         Workflow.objects.filter(status=Workflow.Status.RUNNING).count()
+    )
+    _workflows_blocked.set(
+        Workflow.objects.filter(status=Workflow.Status.BLOCKED).count()
     )
 
 

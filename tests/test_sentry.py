@@ -10,7 +10,7 @@ from everystep.errors import SimulatedCrash
 from everystep.models import Workflow
 from everystep.runner import execute
 from everystep.worker import Worker
-from tests.helpers import claim_next, crash_on, run_to_completion
+from tests.helpers import claim_next, crash_on, re_claim, run_to_completion
 
 pytestmark = pytest.mark.django_db
 
@@ -158,6 +158,31 @@ def test_runner_escape_is_reported(sentry):
     exc, contexts = sentry.events[0]
     assert type(exc).__name__ == "EverystepError"
     assert contexts["everystep"] == {"workflow_id": str(run.id)}
+
+
+@step(unsafe_to_repeat=True)
+def risky():
+    return "r"
+
+
+@workflow
+def risky_flow(args):
+    return risky()
+
+
+def test_blocked_run_is_not_reported(sentry):
+    run = schedule(risky_flow, {})
+    claim_next()
+    runner.fault = crash_on("1")
+    with pytest.raises(SimulatedCrash):
+        execute(run.id)
+    runner.fault = None
+
+    re_claim(run)
+    execute(run.id)
+    run.refresh_from_db()
+    assert run.status == Workflow.Status.BLOCKED
+    assert sentry.events == []
 
 
 def test_missing_sentry_sdk_is_a_noop():

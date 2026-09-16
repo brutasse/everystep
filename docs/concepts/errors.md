@@ -94,6 +94,43 @@ if isinstance(t, Terminal) and t.reason == "node-full":
 `Terminal` inside a `parallel` branch stops the whole run: it is raised
 ahead of any `ExceptionGroup` the fork would build.
 
+## Blocked runs: uncertain effects
+
+A step marked [`unsafe_to_repeat`](../guides/side-effects.md#unsafe-to-repeat)
+is recorded as `started` before its side effect runs. If the worker dies in
+the effect window — or a second claimant races the first — the next replay
+finds a `started` row with no outcome. The effect may or may not have
+happened, and only the external system can say. The engine therefore:
+
+- does **not** execute the step again;
+- ends the run in the **`blocked`** status with an `EffectUncertain` on
+  `run.error`;
+- reports nothing to Sentry: a blocked run is a holding state, not a
+  failure. It is the engine's dead-letter queue, and
+  `everystep_workflows_blocked` measures its depth.
+
+A human resolves the run after checking the external system:
+
+```
+python manage.py everystep_resolve_step <run_id> <step_id> --result '<json>'
+python manage.py everystep_resolve_step <run_id> <step_id> --error '<message>'
+python manage.py everystep_resolve_step <run_id> <step_id> --discard
+```
+
+- `--result` — the effect happened; the JSON value becomes the step's
+  recorded result and later steps read it as usual.
+- `--error` — the effect happened and failed; the step is recorded `failed`
+  with that message, so durable `try/except` cleanup in the body still runs
+  on the next pass.
+- `--discard` — the effect did **not** happen; the `started` row is deleted
+  and the step executes on the next claim. Use this when the crash landed
+  before the effect: the `started` row is a false alarm, and discarding is
+  what lets the step run at all.
+
+Each resolution puts the run back in the queue as `scheduled`, where any
+worker resumes it from the recorded steps. A run may only be resolved while
+it is `blocked`, and only its `started` step may be resolved.
+
 ## everystep's own exception types
 
 | Exception | Meaning |
@@ -101,5 +138,6 @@ ahead of any `ExceptionGroup` the fork would build.
 | `EverystepError` | Base class for everystep errors: bad `everystep_id`, non-serializable arguments or results, duplicate names in a scope. |
 | `WorkflowCodeError` | The body at a recorded step id no longer calls the recorded function: the code diverged from an in-flight run. The run fails loudly instead of executing the wrong work. |
 | `StepFailure` | A replayed recorded failure whose original exception type is unavailable. Carries the stored message. |
+| `EffectUncertain` | A step marked unsafe to repeat may have performed its effect; the run ends `blocked` instead of re-executing it. A holding state, never reported to Sentry; resolved with `everystep_resolve_step`. |
 | `SimulatedCrash` | Raised only from the test `fault` hook to simulate a process death. Never raised in production code paths. |
 | `DrainOrphan` | Internal control flow: raised at a step boundary while the worker drains after a stop signal; the worker requeues the run so any runner can claim it. You neither raise nor catch this. |

@@ -14,6 +14,18 @@ class StepFailure(EverystepError):
     """A recorded step failure whose original exception type is unavailable."""
 
 
+class EffectUncertain(EverystepError):
+    """A step marked unsafe to repeat may have performed its effect.
+
+    The step's outcome was never recorded (the worker died in the effect
+    window, or another claimant holds it), so the engine cannot tell whether
+    the effect happened. It refuses to execute the step again and ends the
+    run in the `blocked` status — a holding state, not a failure: it is
+    never reported to Sentry. The run is resolved by a human with the
+    `everystep_resolve_step` management command.
+    """
+
+
 class WorkflowCodeError(EverystepError):
     """A workflow body diverged from its previously recorded step identities."""
 

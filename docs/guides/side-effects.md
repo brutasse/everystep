@@ -64,4 +64,63 @@ charges the order again, or sends the e-mail again. If the API cannot take a
 key and the operation cannot be made convergent, that is a property of the
 integration to solve — wrap it in a keyed operation at the boundary (a
 "reservation" row, a request id you generate once and persist), not inside
-the step.
+the step. Or, when you would rather have the engine stop and ask than run
+the effect twice, mark the step [unsafe to repeat](#unsafe-to-repeat).
+
+## Unsafe to repeat
+
+When the effect is genuinely unsafe to repeat and cannot be made idempotent
+or keyed, mark the step:
+
+```python
+@step(unsafe_to_repeat=True)
+def charge_order(order_id, amount):
+    return billing_api.charge(order_id, amount)   # no idempotency key supported
+```
+
+The mark changes what the engine does in the
+[at-least-once window](../concepts/index.md#durability-at-least-once):
+
+- **Before** the function runs, the step is recorded with status `started`.
+  The unique `(workflow, step_id)` constraint makes this insert an atomic
+  claim on the effect — no racing claimant can run it a second time.
+- **After** the function returns or raises, the row is updated in place to
+  `done` or `failed` with the outcome.
+- On a later replay, a `started` row with no outcome means the effect may
+  have happened. The engine **does not re-execute the step**: the run ends
+  in the `blocked` status with an `EffectUncertain` on `run.error`.
+
+A blocked run is a holding state, not a failure: it is never reported to
+Sentry, no runner re-claims it, and `everystep_workflows_blocked` measures
+how many are waiting on you. After checking the external system, resolve
+the run:
+
+```
+python manage.py everystep_resolve_step <run_id> <step_id> --result '{"charge_id": "ch_123"}'
+python manage.py everystep_resolve_step <run_id> <step_id> --error 'charge declined'
+python manage.py everystep_resolve_step <run_id> <step_id> --discard
+```
+
+- `--result` — the effect happened; the value becomes the recorded result.
+- `--error` — the effect happened and failed; the step is recorded `failed`
+  so the body's durable `try/except` cleanup still runs.
+- `--discard` — the effect did not happen; the `started` row is deleted and
+  the step runs on the next claim.
+
+!!! warning
+    A crash can also land **before** the effect: the `started` row is
+    written first, then the function runs. If the worker died in that gap,
+    the effect never happened and the run is blocked on a false alarm.
+    Verify in the external system — that check is the whole point — and use
+    `--discard` to let the step run.
+
+Each resolution puts the run back in the queue; any worker resumes it from
+the recorded steps.
+
+Two more properties:
+
+- The mark is read from the **current code** on replay. Removing
+  `unsafe_to_repeat` from a step whose `started` row survived a crash opts
+  that step back into at-least-once: the engine re-executes it.
+- A blocked run's `started` step is the only step that can be resolved, and
+  a run can only be resolved while it is `blocked`.

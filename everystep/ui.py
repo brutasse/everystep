@@ -93,8 +93,10 @@ tr.run.selected td { background: #1b2a45; }
 .pill.running { color: var(--accent); border-color: var(--accent); }
 .pill.scheduled { color: var(--dim); border-color: var(--dim); }
 .pill.stopped { color: var(--warn); border-color: var(--warn); }
+.pill.blocked { color: var(--warn); border-color: var(--warn); }
 .pill.done { color: var(--ok); border-color: var(--ok); }
 .pill.in_flight { color: var(--accent); border-color: var(--accent); }
+.pill.started { color: var(--warn); border-color: var(--warn); }
 .pill.pending { color: var(--dim); border-color: var(--dim); }
 .bar { display: inline-block; width: 80px; height: 7px; border-radius: 3px; background: #232b3a; vertical-align: middle; }
 .bar i { display: block; height: 100%; border-radius: 3px; background: var(--ok); }
@@ -113,6 +115,7 @@ tr.run.selected td { background: #1b2a45; }
 .dag-legend-dot.done { border-color: var(--ok); }
 .dag-legend-dot.failed { border-color: var(--err); }
 .dag-legend-dot.in_flight { border-color: var(--accent); }
+.dag-legend-dot.started { border-color: var(--warn); }
 .dag-zoom { float: right; display: flex; align-items: center; gap: 4px; margin: 2px 0 6px; }
 .dag-zoom button {
   background: var(--panel);
@@ -152,6 +155,8 @@ tr.run.selected td { background: #1b2a45; }
 .dag-node.in_flight .ring { stroke: var(--accent); }
 .dag-node.in_flight .core { fill: var(--accent); }
 .dag-node.in_flight .halo { animation: dag-pulse 1.2s ease-in-out infinite; }
+.dag-node.started .ring { stroke: var(--warn); }
+.dag-node.started .core { fill: var(--warn); }
 @keyframes dag-pulse {
   0%, 100% { opacity: 0.6; transform: scale(1); }
   50% { opacity: 0; transform: scale(1.9); }
@@ -540,7 +545,7 @@ function renderDetail() {
     const counts = document.createElement("div");
     counts.className = "counts";
     counts.textContent = g.total + " steps · " + g.done + " done · " + g.failed + " failed · " +
-      g.in_flight + " in flight · " + g.pending + " pending";
+      g.in_flight + " in flight · " + g.started + " uncertain · " + g.pending + " pending";
     panel.append(counts);
   } else {
     const banner = document.createElement("div");
@@ -660,7 +665,7 @@ function renderDag(items, byId, parent) {
 
   const legend = document.createElement("div");
   legend.className = "dag-legend";
-  for (const [status, label] of [["done", "done"], ["failed", "failed"], ["in_flight", "in flight"], ["pending", "pending"]]) {
+  for (const [status, label] of [["done", "done"], ["failed", "failed"], ["in_flight", "in flight"], ["started", "uncertain"], ["pending", "pending"]]) {
     const item = document.createElement("span");
     item.className = "item";
     const dot = document.createElement("span");
@@ -731,6 +736,17 @@ function renderDag(items, byId, parent) {
       box.appendChild(pre(step.error.message || pretty(step.error)));
       if (Array.isArray(step.error.args) && step.error.args.length) box.appendChild(pre(pretty(step.error.args)));
       card.appendChild(box);
+    }
+    if (step.status === "started") {
+      if (state.detail.run.status === "blocked") {
+        card.appendChild(dim(
+          "started but unrecorded — the effect may have happened. " +
+          "Resolve the run with: python manage.py everystep_resolve_step " +
+          state.detail.run.id + " " + n.id
+        ));
+      } else {
+        card.appendChild(dim("effect in flight — outcome not recorded yet."));
+      }
     }
   }
   function dagField(label, value) {

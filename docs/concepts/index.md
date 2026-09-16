@@ -10,18 +10,19 @@ A workflow run is a `everystep_workflow` row with a status:
 ```
           claim
 scheduled ──────▶ running ──▶ completed
-     ▲               ├──▶ failed
-     └───────────────└──▶ stopped
-          requeue
+      ▲               ├──▶ failed
+      └───────────────├──▶ stopped
+           requeue    └──▶ blocked
 ```
 
 | Status | Meaning |
 | --- | --- |
-| `scheduled` | Claimable. Set by `schedule()` at commit time, and by a worker requeuing its runs at shutdown. |
+| `scheduled` | Claimable. Set by `schedule()` at commit time, and by a worker requeueing its runs at shutdown. |
 | `running` | Claimed; `claimed_by` names the worker. Either actively executing, or parked there by a crashed worker — a worker that shuts down cleanly requeues its runs instead. |
 | `completed` | Terminal. `result` holds the workflow's return value; `completed_at` is set. |
 | `failed` | Terminal. `error` holds the encoded exception; `completed_at` is set. |
 | `stopped` | Terminal, deliberate. A step raised `Terminal`; `error` holds the encoded reason and payload. See [errors](errors.md#stopping-a-workflow-terminal). |
+| `blocked` | Terminal, awaiting a human decision. A step marked unsafe to repeat started but was never recorded; `error` holds the `EffectUncertain` reason. Resolved with the `everystep_resolve_step` command, which returns the run to `scheduled`. See [errors](errors.md#blocked-runs-uncertain-effects). |
 
 Every executed step is a `everystep_step` row with its own status — `done` or
 `failed` — independent of the run's status.
@@ -94,6 +95,10 @@ This is the whole robustness story of everystep, and it is why:
 - durable means *the run reaches a terminal state*, not *the run succeeded*;
 - your side effects must be **idempotent or keyed** — see the
   [side effects guide](../guides/side-effects.md);
+- steps that are neither can be marked `unsafe_to_repeat`: the engine then
+  refuses to re-execute them in the uncertain case and parks the run in the
+  `blocked` status for a human to resolve — see
+  [unsafe to repeat](../guides/side-effects.md#unsafe-to-repeat);
 - steps that fail are recorded as failed and their exception re-raised on
   every replay, so `try/except` cleanup in the body is durable too — see
   [errors](errors.md).

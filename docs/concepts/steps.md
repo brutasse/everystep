@@ -9,7 +9,11 @@ running workflow:
    stored exception, without executing the function;
 3. otherwise validates that the arguments are serializable, executes the
    function, records the outcome (result **or** exception) in the `Step`
-   table, and returns it.
+   table, and returns it. A step marked
+   [`unsafe_to_repeat`](../guides/side-effects.md#unsafe-to-repeat) is
+   additionally recorded as `started` **before** its function runs, so a
+   crash in the effect window leaves a row the next replay can refuse to
+   repeat.
 
 Each execution is a row:
 
@@ -18,7 +22,7 @@ Each execution is a row:
 | `step_id` | the dotpath identity |
 | `name` | the qualified function name, for divergence detection on replay |
 | `args`, `kwargs` | what was passed, as recorded |
-| `status` | `done` or `failed` |
+| `status` | `done` or `failed` — or `started`, for a marked unsafe-to-repeat step between its pre-record and its outcome |
 | `result` | the return value, or null |
 | `error` | the encoded exception, or null |
 

@@ -46,7 +46,7 @@ call `everystep.metrics.update_queue_gauges()` before rendering.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `everystep_workflow_runs_total` | counter | `workflow`, `status` | Runs ended, by final status (`completed`, `failed`, `stopped`). |
+| `everystep_workflow_runs_total` | counter | `workflow`, `status` | Runs ended, by final status (`completed`, `failed`, `stopped`, `blocked`). |
 | `everystep_workflow_duration_seconds` | histogram | `workflow`, `status` | Wall time from claim to terminal state. |
 | `everystep_step_runs_total` | counter | `workflow`, `step`, `status` | Step executions, by outcome (`done`, `failed`). |
 | `everystep_step_duration_seconds` | histogram | `workflow`, `step` | Step execution time. |
@@ -57,6 +57,7 @@ call `everystep.metrics.update_queue_gauges()` before rendering.
 | `everystep_worker_started_at_seconds` | gauge | `runner` | Unix time the worker started (uptime). |
 | `everystep_workflows_pending` | gauge | — | Workflows scheduled and waiting for a claim. |
 | `everystep_workflows_running` | gauge | — | Workflows currently running. |
+| `everystep_workflows_blocked` | gauge | — | Workflows blocked awaiting a human decision on an [unsafe-to-repeat](../guides/side-effects.md#unsafe-to-repeat) step. Alert on this: it is the dead-letter queue depth. |
 | `everystep_workflows_oldest_pending_age_seconds` | gauge | — | Age of the oldest scheduled workflow. |
 
 The queue gauges (`everystep_workflows_*`) are computed from the database at

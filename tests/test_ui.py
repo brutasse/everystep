@@ -12,10 +12,12 @@ import pytest
 from django.test import Client
 
 import everystep.views as views
+from everystep import runner
 from everystep import schedule, step, ui, workflow
+from everystep.errors import SimulatedCrash
 from everystep.models import Workflow
 from everystep.runner import execute
-from tests.helpers import run_to_completion
+from tests.helpers import crash_on, re_claim, run_to_completion
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -28,6 +30,17 @@ def u_a():
 @step
 def u_b(x):
     return f"b{x}"
+
+
+@step(unsafe_to_repeat=True)
+def u_risky():
+    return "r"
+
+
+@workflow
+def u_blocked(args):
+    u_a()
+    return u_risky()
 
 
 @workflow
@@ -130,6 +143,49 @@ def test_run_detail_failed_step():
     assert data["run"]["error"]["message"] == "kaput"
     failed = [s for s in data["steps"] if s["status"] == "failed"][0]
     assert failed["error"]["message"] == "kaput"
+
+
+def test_run_detail_blocked():
+    wf = _claim(schedule(u_blocked, {}))
+    runner.fault = crash_on("2")
+    with pytest.raises(SimulatedCrash):
+        execute(wf.id)
+    runner.fault = None
+
+    re_claim(wf)
+    execute(wf.id)
+    wf.refresh_from_db()
+    assert wf.status == Workflow.Status.BLOCKED
+
+    data = Client().get(f"/everystep/api/run/{wf.id}").json()
+    assert data["run"]["status"] == Workflow.Status.BLOCKED
+    assert data["run"]["error"]["type"].endswith("EffectUncertain")
+    g = data["graph"]
+    assert g["supported"] is True
+    assert g["done"] == 1 and g["started"] == 1
+    assert [n["status"] for n in g["nodes"]] == ["done", "started"]
+    assert data["steps"][0]["status"] == "done"
+    assert data["steps"][1]["status"] == "started"
+
+    by_status = Client().get("/everystep/api/runs?status=blocked").json()
+    assert any(r["id"] == str(wf.id) for r in by_status["runs"])
+
+
+def test_run_detail_marked_step_in_flight():
+    # A marked step executing is shown in flight, not uncertain: its
+    # started pre-record is the in-flight marker while the run is running.
+    wf = _claim(schedule(u_blocked, {}))
+    runner.fault = crash_on("2")
+    with pytest.raises(SimulatedCrash):
+        execute(wf.id)
+    runner.fault = None
+
+    data = Client().get(f"/everystep/api/run/{wf.id}").json()
+    assert data["run"]["status"] == Workflow.Status.RUNNING
+    g = data["graph"]
+    assert [n["status"] for n in g["nodes"]] == ["done", "in_flight"]
+    assert g["in_flight"] == 1 and g["started"] == 0
+    assert data["steps"][1]["status"] == "started"
 
 
 def test_run_detail_flat():

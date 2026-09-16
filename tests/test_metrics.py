@@ -78,6 +78,16 @@ def stopped_wf(args):
     return stop_step()
 
 
+@step(unsafe_to_repeat=True)
+def marked_step():
+    return "m"
+
+
+@workflow
+def blocked_flow(args):
+    return marked_step()
+
+
 @workflow
 def two_steps(args):
     ok_step()
@@ -143,6 +153,27 @@ def test_stopped_workflow_records_stopped_status():
         _value(metrics._workflow_runs, workflow="tests.test_metrics.stopped_wf", status="stopped")
         == 1
     )
+
+
+def test_blocked_workflow_records_blocked_status():
+    run = schedule(blocked_flow, {})
+    claimed = claim_new(1, "b-w")
+    assert [w.id for w in claimed] == [run.id]
+    runner.fault = crash_on("1")
+    with pytest.raises(SimulatedCrash):
+        execute(run.id)
+    runner.fault = None
+
+    re_claim(run)
+    execute(run.id)
+    run.refresh_from_db()
+    assert run.status == Workflow.Status.BLOCKED
+    assert (
+        _value(metrics._workflow_runs, workflow="tests.test_metrics.blocked_flow", status="blocked")
+        == 1
+    )
+    metrics.update_queue_gauges()
+    assert _value(metrics._workflows_blocked) == 1
 
 
 def test_replayed_step_is_not_recounted():

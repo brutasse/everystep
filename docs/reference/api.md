@@ -32,6 +32,8 @@ blocks below document them at their definition site.
 
 ::: everystep.errors.WorkflowCodeError
 
+::: everystep.errors.EffectUncertain
+
 ::: everystep.errors.StepFailure
 
 ::: everystep.errors.SimulatedCrash

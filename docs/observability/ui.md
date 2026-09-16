@@ -30,8 +30,8 @@ whose proxies do not stream SSE fall back to polling `/api/runs`.
 ## What you see
 
 **Runs** — the 200 most recent, newest first, each with its name, status
-(`scheduled`, `running`, `completed`, `failed`, `stopped`), the claiming
-runner, and a step progress count. **Runners** are the distinct
+(`scheduled`, `running`, `completed`, `failed`, `stopped`, `blocked`), the
+claiming runner, and a step progress count. **Runners** are the distinct
 `claimed_by` values of running workflows with their in-flight counts; an
 idle runner has nothing in flight and does not appear.
 
@@ -52,6 +52,9 @@ is a node, each `parallel` a fan-out / fan-in, with the step's live status
 as the node color:
 
 - recorded steps show their outcome (`done`, `failed`);
+- a step started by an [unsafe-to-repeat](../guides/side-effects.md#unsafe-to-repeat)
+  mark but never recorded shows **uncertain** — its node card carries the
+  `everystep_resolve_step` command that resolves the run;
 - the in-flight step of a running workflow is shown **in flight** (pulsing);
 - the rest are `pending`.
 

@@ -47,6 +47,7 @@ class Workflow(models.Model):
         COMPLETED = "completed"
         FAILED = "failed"
         STOPPED = "stopped"
+        BLOCKED = "blocked"
 
     id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
     name = models.CharField(max_length=300)
@@ -78,6 +79,7 @@ class Step(models.Model):
     class Status(models.TextChoices):
         DONE = "done"
         FAILED = "failed"
+        STARTED = "started"
 
     workflow = models.ForeignKey(Workflow, on_delete=models.CASCADE, related_name="steps")
     step_id = models.CharField(max_length=300)

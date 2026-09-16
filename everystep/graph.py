@@ -80,13 +80,21 @@ def step_count(graph):
 def annotate(graph, steps, running):
     """Overlay recorded step statuses on a static graph.
 
-    `steps` maps step id to its recorded status ("done" or "failed").
+    `steps` maps step id to its recorded status ("done", "failed" or
+    "started").
     Returns (annotated, summary): a copy of the graph with a "status" on
-    every step node ("done", "failed", "in_flight" or "pending"), and a
-    summary with total/done/failed/in_flight/pending/unmatched.
+    every step node ("done", "failed", "in_flight", "started" or "pending"),
+    and a summary with total/done/failed/in_flight/started/pending/unmatched.
     """
     annotated = copy.deepcopy(graph)
-    summary: dict = {"total": 0, "done": 0, "failed": 0, "in_flight": 0, "pending": 0}
+    summary: dict = {
+        "total": 0,
+        "done": 0,
+        "failed": 0,
+        "in_flight": 0,
+        "started": 0,
+        "pending": 0,
+    }
     static_ids = []
 
     def count(items):
@@ -100,16 +108,25 @@ def annotate(graph, steps, running):
 
     def walk(items, active):
         # active: the run is running and this scope is reachable, so the
-        # first unrecorded step here is the one in flight.
+        # first unrecorded step here is the one in flight. A recorded
+        # `started` row of a marked step is the same thing while the run is
+        # still running (the step is executing); it only reads as `started`
+        # (uncertain) once the run has stopped on it.
         reachable = True
         settled = True
         for node in items:
             if node["kind"] == "step":
                 status = steps.get(node["id"])
                 if status is not None:
-                    node["status"] = status
-                    summary[status] += 1
-                    ok = True
+                    if status == "started" and active:
+                        node["status"] = "in_flight"
+                        summary["in_flight"] += 1
+                    else:
+                        node["status"] = status
+                        summary[status] += 1
+                    # A started step has no settled outcome yet: nothing after
+                    # it has run.
+                    ok = status != "started"
                 elif reachable and active:
                     node["status"] = "in_flight"
                     summary["in_flight"] += 1

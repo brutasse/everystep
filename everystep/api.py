@@ -7,7 +7,7 @@ from django.db import connections
 
 from everystep import context, serde, traces
 from everystep.context import Context
-from everystep.errors import EverystepError, DrainOrphan, Terminal
+from everystep.errors import EverystepError, DrainOrphan, EffectUncertain, Terminal
 from everystep.models import Workflow
 from everystep.registry import name_of, registry
 from everystep.runner import run_step
@@ -35,7 +35,7 @@ def workflow(func):
     return registry.register_workflow(wrapper)
 
 
-def step(func):
+def step(func=None, *, unsafe_to_repeat=False):
     """Mark a function as a durable step.
 
     Inside a running workflow, the call is recorded: the outcome (result or
@@ -43,20 +43,32 @@ def step(func):
     the function body only runs for unrecorded steps. Called outside a
     running workflow, it runs as a plain function with no recording. Pass
     ``everystep_id=...`` at the call site for a stable step identity.
+
+    With ``unsafe_to_repeat=True``, the step's side effect must not happen
+    twice. The engine records the step as started before running it, and if
+    a replay finds a started step without an outcome — the worker died in
+    the effect window — it does not re-execute the step: the run ends in
+    the ``blocked`` status until a human resolves it with the
+    ``everystep_resolve_step`` management command.
     """
-    if not callable(func):
+    if func is not None and not callable(func):
         raise TypeError("@step must decorate a function")
 
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        everystep_id = kwargs.pop("everystep_id", None)
-        ctx = context.current()
-        if ctx is None:
-            return func(*args, **kwargs)
-        return run_step(ctx, func, args, kwargs, everystep_id)
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            everystep_id = kwargs.pop("everystep_id", None)
+            ctx = context.current()
+            if ctx is None:
+                return fn(*args, **kwargs)
+            return run_step(ctx, fn, args, kwargs, everystep_id, unsafe_to_repeat)
 
-    wrapper.__everystep__ = _STEP
-    return registry.register_step(wrapper)
+        wrapper.__everystep__ = _STEP
+        return registry.register_step(wrapper)
+
+    if func is not None:
+        return decorate(func)
+    return decorate
 
 
 def schedule(workflow_func, *args, idempotency_key=None):
@@ -170,7 +182,7 @@ def parallel(*branches, everystep_id=None):
     errors = [output for output in outputs if isinstance(output, _Failed)]
     if not errors:
         return tuple(output.value for output in outputs)
-    drains = [e for e in errors if isinstance(e.exc, (DrainOrphan, Terminal))]
+    drains = [e for e in errors if isinstance(e.exc, (DrainOrphan, EffectUncertain, Terminal))]
     if drains:
         raise drains[0].exc
     if len(errors) == 1:

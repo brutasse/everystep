@@ -68,9 +68,10 @@ def provision_vm(args):
    restarts so a restart reclaims the runs a crash left behind.
 
 The details — step identity and naming, reading previous results, `Terminal`
-stops, idempotent or keyed side effects, rollouts and crashed runners,
-metrics, Sentry, traces, the UI, storage limits, thread safety — are all in
-the [documentation](https://brutasse.github.io/everystep/).
+stops, idempotent or keyed side effects, marking steps unsafe to repeat,
+rollouts and crashed runners, metrics, Sentry, traces, the UI, storage
+limits, thread safety — are all in the
+[documentation](https://brutasse.github.io/everystep/).
 
 ## Development
 

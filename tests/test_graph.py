@@ -209,6 +209,7 @@ def test_annotate_marks_in_flight_step():
         "done": 3,
         "failed": 0,
         "in_flight": 0,
+        "started": 0,
         "pending": 0,
         "unmatched": [],
     }
@@ -234,6 +235,7 @@ def test_annotate_fork_in_flight():
         "done": 0,
         "failed": 0,
         "in_flight": 2,
+        "started": 0,
         "pending": 1,
         "unmatched": [],
     }

@@ -93,12 +93,12 @@ the record did not — the next replay finds no record for that step and
 This is the whole robustness story of everystep, and it is why:
 
 - durable means *the run reaches a terminal state*, not *the run succeeded*;
-- your side effects must be **idempotent or keyed** — see the
+- your side effects must be **safe to repeat** — idempotent on their own,
+  or made so with a stable key the receiver dedupes on — or **marked**
+  `unsafe_to_repeat`, in which case the engine refuses to re-execute them in
+  the uncertain case and parks the run in the `blocked` status for a human
+  to resolve — see the
   [side effects guide](../guides/side-effects.md);
-- steps that are neither can be marked `unsafe_to_repeat`: the engine then
-  refuses to re-execute them in the uncertain case and parks the run in the
-  `blocked` status for a human to resolve — see
-  [unsafe to repeat](../guides/side-effects.md#unsafe-to-repeat);
 - steps that fail are recorded as failed and their exception re-raised on
   every replay, so `try/except` cleanup in the body is durable too — see
   [errors](errors.md).

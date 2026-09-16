@@ -1,14 +1,15 @@
-# Idempotent or keyed side effects
+# Side effects and re-runs
 
 A step that re-runs after a crash performs its side effect **twice** — the
 at-least-once window is described in
-[how it works](../concepts/index.md#durability-at-least-once). There are two
-ways to make that harmless.
+[how it works](../concepts/index.md#durability-at-least-once). Either make the
+re-run harmless, or mark the step so the engine stops and asks instead of
+guessing.
 
-## Idempotent
+## Safe to repeat
 
-The effect is safe to repeat: the second execution leaves the system in the
-same state as the first.
+The effect is idempotent: the second execution leaves the system in the same
+state as the first.
 
 ```python
 @step
@@ -21,10 +22,11 @@ Setting a value, deleting something (the `delete_vm` cleanup from the
 (`INSERT ... ON CONFLICT DO UPDATE`, `CREATE INDEX IF NOT EXISTS`) are
 idempotent: run the line once or twice, the end state is the same.
 
-## Keyed
+### Keyed effects
 
-The effect is not safe to repeat, so it is sent with a **stable key** that
-the receiving system uses to recognize and suppress the duplicate.
+When the effect is not idempotent on its own, you can make it safe to repeat
+by sending it with a **stable key** that the receiving system uses to
+recognize and suppress the duplicate — idempotency at the receiver.
 
 ```python
 @step
@@ -38,9 +40,10 @@ If the worker dies after the charge is settled but before the step is
 recorded, recovery re-runs the step with the same key and the billing API
 returns the original charge instead of charging again. The same pattern
 covers HTTP `Idempotency-Key` headers, uniquely named resources, or
-`INSERT ... ON CONFLICT DO NOTHING` on a unique column.
-
-## Choosing the key
+`INSERT ... ON CONFLICT DO NOTHING` on a unique column. When the API itself
+cannot take a key, wrap the call in a keyed operation at the boundary — a
+"reservation" row, or a request id you generate once and persist — rather
+than inside the step.
 
 The key must be **identical on every replay of the same step**:
 
@@ -56,21 +59,11 @@ These do **not** work:
 - timestamps — a re-run computes a new key, and the duplicate passes;
 - `uuid4()` — same problem, for the same reason.
 
-## What is neither
-
-A plain `cloud_api.create_vm(name, size)`, an unkeyed charge, or an unkeyed
-e-mail is neither idempotent nor keyed: each re-run provisions another VM,
-charges the order again, or sends the e-mail again. If the API cannot take a
-key and the operation cannot be made convergent, that is a property of the
-integration to solve — wrap it in a keyed operation at the boundary (a
-"reservation" row, a request id you generate once and persist), not inside
-the step. Or, when you would rather have the engine stop and ask than run
-the effect twice, mark the step [unsafe to repeat](#unsafe-to-repeat).
-
 ## Unsafe to repeat
 
-When the effect is genuinely unsafe to repeat and cannot be made idempotent
-or keyed, mark the step:
+When you cannot make the effect safe to repeat — a plain
+`cloud_api.create_vm(name, size)`, an unkeyed charge, or an unkeyed e-mail —
+mark the step:
 
 ```python
 @step(unsafe_to_repeat=True)

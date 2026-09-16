@@ -40,8 +40,9 @@ and re-runs `delete_vm`.
 
 !!! warning
     Cleanup steps are at-least-once like all steps: `delete_vm` above can run
-    once **per pass**, i.e. more than once across crashes. Make cleanup idempotent
-    or keyed like any other side effect — see the
+    once **per pass**, i.e. more than once across crashes. Make cleanup safe to
+    repeat — idempotent, or keyed at the receiver — or mark it
+    `unsafe_to_repeat` — see the
     [side effects guide](../guides/side-effects.md).
 
 ## Decoding stored exceptions
